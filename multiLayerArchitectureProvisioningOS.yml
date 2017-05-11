@@ -1,0 +1,119 @@
+description: "Simple template"
+heat_template_version: 2013-05-23
+parameters:
+  flavor:
+    constraints: 
+      - custom_constraint: nova.flavor
+    description: "Flavor to use for servers"
+    type: string
+  image_name: 
+    constraints: 
+      - custom_constraint: glance.image
+    description: "IMAGE Name of the image to be used for the compute instance"
+    type: string
+  key_name: 
+    constraints: 
+      - custom_constraint: nova.keypair
+    description: "KEY Name of the key pair to be used for the compute instance"
+    type: string
+  private_net_id: 
+    constraints: 
+      - custom_constraint: neutron.network
+    description: "ID of private network into which servers get deployed"
+    type: string
+    
+resources:
+  web-app:
+    type: OS::Nova::Server
+    properties:
+      name: web-app
+      admin_user: centos
+      image: { get_param: image_name }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: server1_port }
+      user_data: |
+            #!/bin/bash
+            sudo sed -i s/nameserver/nameserver\ 8\.8\.8\.8/g /etc/resolv.conf
+            sudo yum install -y httpd mod_ssl
+            sudo /usr/sbin/apachectl start
+            sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+            sudo service iptables save
+            sudo /sbin/chkconfig httpd on
+            sudo yum install -y php php-mysql php-devel php-gd php-pecl-memcache php-pspell php-snmp php-xmlrpc php-xml
+            sudo /usr/sbin/apachectl stop
+            sudo /usr/sbin/apachectl start
+  
+  server1_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_param: private_net_id }
+      security_groups: [{ get_resource: server_security_group }]
+      
+  web-app-floating-ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: ext-net
+
+  association-web-app:
+    type: OS::Neutron::FloatingIPAssociation
+    properties:
+      floatingip_id: { get_resource: web-app-floating-ip }
+      port_id: { get_resource: server1_port } 
+
+
+
+  db-app:
+    type: OS::Nova::Server
+    properties:
+      name: db-app
+      admin_user: centos
+      image: { get_param: image_name }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: server2_port}
+      user_data: |
+            #!/bin/bash
+            sudo sed -i s/nameserver/nameserver\ 8\.8\.8\.8/g /etc/resolv.conf
+            sudo debconf-set-selections <<< 'mysql-server mysql-server/root_password password "vvm4321"'
+            sudo debconf-set-selections <<< 'mysql-server mysql-server/root_password_again password "vvm4321"'
+            sudo yum install -y mysql-server
+            sudo /sbin/service mysqld start
+            sudo iptables -I INPUT -p tcp --dport 3306 -m state --state NEW,ESTABLISHED -j ACCEPT
+            sudo iptables -I OUTPUT -p tcp --sport 3306 -m state --state ESTABLISHED -j ACCEPT
+            
+      
+  server2_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_param: private_net_id }
+      security_groups: [{ get_resource: server_security_group }]
+      
+  db-app-floating-ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network: ext-net 
+
+  association-db-app:
+    type: OS::Neutron::FloatingIPAssociation
+    properties:
+      floatingip_id: { get_resource: db-app-floating-ip }
+      port_id: { get_resource: server2_port }
+
+      
+                  
+  server_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      description: Add security group rules for server
+      name: security-group
+      rules:
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: tcp
+          port_range_min: 1
+          port_range_max: 65535
+        - remote_ip_prefix: 0.0.0.0/0
+          protocol: icmp
+  
